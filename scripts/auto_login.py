@@ -40,7 +40,7 @@ class Telegram:
                       "text": msg, "parse_mode": "HTML"},
                 timeout=30
             )
-        except:
+        except Exception:
             pass
 
     def photo(self, path, caption=""):
@@ -54,7 +54,7 @@ class Telegram:
                     files={"photo": f},
                     timeout=60
                 )
-        except:
+        except Exception:
             pass
 
 
@@ -165,7 +165,7 @@ class AutoLogin:
         try:
             page.screenshot(path=f)
             self.shots.append(f)
-        except:
+        except Exception:
             pass
         return f
 
@@ -177,7 +177,7 @@ class AutoLogin:
                     el.click()
                     self.log(f"已点击: {desc}", "SUCCESS")
                     return True
-            except:
+            except Exception:
                 pass
         return False
 
@@ -187,7 +187,7 @@ class AutoLogin:
             for c in context.cookies():
                 if c['name'] == 'user_session' and 'github' in c.get('domain', ''):
                     return c['value']
-        except:
+        except Exception:
             pass
         return None
 
@@ -236,7 +236,7 @@ class AutoLogin:
                 try:
                     page.reload(timeout=10000)
                     page.wait_for_load_state('networkidle', timeout=10000)
-                except:
+                except Exception:
                     pass
 
         if 'verified-device' not in page.url:
@@ -324,7 +324,7 @@ class AutoLogin:
                     if otp_input.is_visible(timeout=5000):
                         self.log(f"找到2FA输入框: {selector}", "SUCCESS")
                         break
-                except:
+                except Exception:
                     continue
 
             if not otp_input:
@@ -333,7 +333,7 @@ class AutoLogin:
 
             try:
                 code_2fa = self.generate_totp(self.secret_2fa)
-                self.log(f"通过GH_2FA_SECRET生成验证码", "STEP")
+                self.log("通过GH_2FA_SECRET生成验证码", "STEP")
             except Exception as e:
                 self.log(f"生成TOTP验证码失败: {e}", "ERROR")
                 return False
@@ -397,17 +397,26 @@ class AutoLogin:
             self.tg.photo(
                 mobile_digits, "📱 需要在手机上完成GitHub验证\n请在GitHub Mobile应用中确认登录请求")
 
-            self.log("等待 GitHub Mobile 验证完成...", "STEP")
-            try:
-                page.wait_for_url("**claw.cloud**", timeout=60000)
-                self.log("检测到跳转到 claw.cloud", "SUCCESS")
-                self.shot(page, "redirect_success")
-                self.tg.send("✅ <b>两步验证成功</b>\n🔄 <b>重定向成功</b>")
-                time.sleep(5)
-                return True
-            except:
-                self.log("60秒内未检测到跳转", "WARN")
-                return False
+            self.log("开始轮询授权状态...", "STEP")
+
+            current_url = page.url
+            start_time = time.time()
+            while time.time() - start_time < 60:
+                try:
+                    # 使用 evaluate 强制获取当前 URL
+                    new_url = page.evaluate("window.location.href")
+                    if new_url != current_url:
+                        self.log("检测到URL变化，授权可能已完成", "SUCCESS")
+                        return True
+                except Exception as e:
+                    if "Execution context was destroyed" in str(e):
+                        self.log("检测到页面跳转（上下文销毁），授权成功", "SUCCESS")
+                        return True
+                time.sleep(0.1)
+
+            self.log("60秒内未检测到URL变化", "WARN")
+            return False
+
         except Exception as e:
             self.log(f"点击GitHub Mobile链接过程中出错: {e}", "ERROR")
             return False
@@ -466,7 +475,7 @@ class AutoLogin:
         try:
             page.locator(
                 'input[type="submit"], button[type="submit"]').first.click()
-        except:
+        except Exception:
             pass
         time.sleep(3)
         page.wait_for_load_state('networkidle', timeout=30000)
@@ -487,13 +496,14 @@ class AutoLogin:
                 self.tg.send("❌ <b>两步验证失败</b>")
                 return False
             self.log("两步验证成功！", "SUCCESS")
+            time.sleep(5)
         # 错误
         try:
             err = page.locator('.flash-error').first
             if err.is_visible(timeout=2000):
                 self.log(f"错误: {err.inner_text()}", "ERROR")
                 return False
-        except:
+        except Exception:
             pass
         return True
 
@@ -502,8 +512,12 @@ class AutoLogin:
         if 'github.com/login/oauth/authorize' in page.url:
             self.log("处理 OAuth...", "STEP")
             self.shot(page, "oauth")
-            self.click(page, ['button[name="authorize"]',
-                       'button:has-text("Authorize")'], "授权")
+            self.click(page, [
+                'button.js-oauth-authorize-btn',
+                'button[data-octo-click="oauth_application_authorization"]',
+                'button[name="authorize"]',
+                'button:has-text("Authorize")'
+            ], "授权")
             time.sleep(3)
             page.wait_for_load_state('networkidle', timeout=30000)
 
@@ -511,12 +525,20 @@ class AutoLogin:
         """等待重定向"""
         self.log("等待重定向...", "STEP")
         for i in range(wait):
-            url = page.url
-            if 'claw.cloud' in url and 'signin' not in url.lower():
-                self.log("重定向成功！", "SUCCESS")
-                return True
-            if 'github.com/login/oauth/authorize' in url:
-                self.oauth(page)
+            try:
+                # 使用 evaluate 强制获取当前 URL
+                url = page.evaluate("window.location.href")
+                
+                if 'claw.cloud' in url and 'signin' not in url.lower() and 'callback' not in url.lower():
+                    self.log("重定向成功！", "SUCCESS")
+                    return True
+                
+                if 'github.com/login/oauth/authorize' in url:
+                    self.oauth(page)
+
+            except Exception as e:
+                self.log(f"获取URL失败: {e}", "WARN")
+
             time.sleep(1)
             if i % 10 == 0:
                 self.log(f"  等待... ({i}秒)")
@@ -532,7 +554,7 @@ class AutoLogin:
                 page.wait_for_load_state('networkidle', timeout=15000)
                 self.log(f"已访问: {name}", "SUCCESS")
                 time.sleep(2)
-            except:
+            except Exception:
                 pass
         self.shot(page, "完成")
 
@@ -602,7 +624,7 @@ class AutoLogin:
                                 'domain': 'github.com', 'path': '/'}
                         ])
                         self.log("已加载 Session Cookie", "SUCCESS")
-                    except:
+                    except Exception:
                         self.log("加载 Cookie 失败", "WARN")
 
                 # 1. 访问 ClawCloud
