@@ -2,7 +2,7 @@ name: ClawCloud Keep Alive with Cache
 
 on:
   schedule:
-    - cron: "0 */6 * * *" # 每6小时运行一次
+    - cron: "0 0 */3 * *" # 每3天运行一次
   workflow_dispatch: # 允许手动触发
 
 jobs:
